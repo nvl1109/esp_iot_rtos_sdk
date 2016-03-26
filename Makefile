@@ -25,22 +25,34 @@ APP?=0
 SPI_SPEED?=40
 SPI_MODE?=QIO
 SPI_SIZE_MAP?=0
+SDK_TOOLS	?= c:/Espressif/utils
+ESPTOOL ?= $(SDK_TOOLS)/esptool.exe
+ESPPORT ?= COM3
+BUILD_BASE	= build
+FW_BASE		= firmware
+BIN_APP_0000?=boot_v1.5.bin
+BIN_APP_DIR?=
+BIN_APP_FILE?=user1.1024.new.2.bin
 
 ifeq ($(BOOT), new)
     boot = new
+    BIN_APP_0000=boot_v1.5.bin
 else
     ifeq ($(BOOT), old)
         boot = old
     else
         boot = none
     endif
+    BIN_APP_0000=eagle.flash.bin
 endif
 
 ifeq ($(APP), 1)
     app = 1
+    BIN_APP_DIR=upgrade/
 else
     ifeq ($(APP), 2)
         app = 2
+        BIN_APP_DIR=upgrade/
     else
         app = 0
     endif
@@ -48,14 +60,18 @@ endif
 
 ifeq ($(SPI_SPEED), 26.7)
     freqdiv = 1
+    flashimageoptions = -ff 26m
 else
     ifeq ($(SPI_SPEED), 20)
         freqdiv = 2
+        flashimageoptions = -ff 20m
     else
         ifeq ($(SPI_SPEED), 80)
             freqdiv = 15
+            flashimageoptions = -ff 80m
         else
             freqdiv = 0
+            flashimageoptions = -ff 40m
         endif
     endif
 endif
@@ -63,14 +79,18 @@ endif
 
 ifeq ($(SPI_MODE), QOUT)
     mode = 1
+    flashimageoptions += -fm qout
 else
     ifeq ($(SPI_MODE), DIO)
         mode = 2
+        flashimageoptions += -fm dio
     else
         ifeq ($(SPI_MODE), DOUT)
             mode = 3
+            flashimageoptions += -fm dout
         else
             mode = 0
+            flashimageoptions += -fm qio
         endif
     endif
 endif
@@ -80,10 +100,12 @@ addr = 0x01000
 ifeq ($(SPI_SIZE_MAP), 1)
   size_map = 1
   flash = 256
+  flashimageoptions += -fs 2m
 else
   ifeq ($(SPI_SIZE_MAP), 2)
     size_map = 2
     flash = 1024
+    flashimageoptions += -fs 8m
     ifeq ($(app), 2)
       addr = 0x81000
     endif
@@ -91,6 +113,7 @@ else
     ifeq ($(SPI_SIZE_MAP), 3)
       size_map = 3
       flash = 2048
+      flashimageoptions += -fs 16m
       ifeq ($(app), 2)
         addr = 0x81000
       endif
@@ -98,6 +121,7 @@ else
       ifeq ($(SPI_SIZE_MAP), 4)
         size_map = 4
         flash = 4096
+        flashimageoptions += -fs 32m
         ifeq ($(app), 2)
           addr = 0x81000
         endif
@@ -105,6 +129,7 @@ else
         ifeq ($(SPI_SIZE_MAP), 5)
           size_map = 5
           flash = 2048
+          flashimageoptions += -fs 16m
           ifeq ($(app), 2)
             addr = 0x101000
           endif
@@ -112,12 +137,14 @@ else
           ifeq ($(SPI_SIZE_MAP), 6)
             size_map = 6
             flash = 4096
+            flashimageoptions += -fs 32m
             ifeq ($(app), 2)
               addr = 0x101000
             endif
           else
             size_map = 0
             flash = 512
+            flashimageoptions += -fs 4m
             ifeq ($(app), 2)
               addr = 0x41000
             endif
@@ -131,6 +158,8 @@ endif
 LD_FILE = $(LDDIR)/eagle.app.v6.ld
 
 ifneq ($(boot), none)
+    BIN_APP_DIR=upgrade/
+    BIN_APP_FILE=user$(app).$(flash).$(boot).$(SPI_SIZE_MAP).bin
 ifneq ($(app),0)
     ifeq ($(size_map), 6)
       LD_FILE = $(LDDIR)/eagle.app.v6.$(boot).2048.ld
@@ -158,6 +187,8 @@ ifneq ($(app),0)
 	BIN_NAME = user$(app).$(flash).$(boot).$(size_map)
 endif
 else
+    BIN_APP_FILE=eagle.irom0text.bin
+    BIN_APP_DIR=
     app = 0
 endif
 
@@ -201,7 +232,7 @@ CCFLAGS += 			\
 	-mtext-section-literals \
 	-ffunction-sections \
 	-fdata-sections
-#	-Wall			
+#	-Wall
 
 CFLAGS = $(CCFLAGS) $(DEFINES) $(EXTRA_CCFLAGS) $(INCLUDES)
 DFLAGS = $(CCFLAGS) $(DDEFINES) $(EXTRA_CCFLAGS) $(INCLUDES)
@@ -223,7 +254,7 @@ $$(LIBODIR)/$(1).a: $$(OBJS) $$(DEP_OBJS_$(1)) $$(DEP_LIBS_$(1)) $$(DEPENDS_$(1)
 	$$(if $$(filter %.a,$$?),mkdir -p $$(EXTRACT_DIR)_$(1))
 	$$(if $$(filter %.a,$$?),cd $$(EXTRACT_DIR)_$(1); $$(foreach lib,$$(filter %.a,$$?),$$(AR) xo $$(UP_EXTRACT_DIR)/$$(lib);))
 	$$(AR) ru $$@ $$(filter %.o,$$?) $$(if $$(filter %.a,$$?),$$(EXTRACT_DIR)_$(1)/*.o)
-	$$(if $$(filter %.a,$$?),$$(RM) -r $$(EXTRACT_DIR)_$(1))
+	$$(if $$(filter %.a,$$?),$$(RM) -R $$(EXTRACT_DIR)_$(1))
 endef
 
 define MakeImage
@@ -231,20 +262,20 @@ DEP_LIBS_$(1) = $$(foreach lib,$$(filter %.a,$$(COMPONENTS_$(1))),$$(dir $$(lib)
 DEP_OBJS_$(1) = $$(foreach obj,$$(filter %.o,$$(COMPONENTS_$(1))),$$(dir $$(obj))$$(OBJODIR)/$$(notdir $$(obj)))
 $$(IMAGEODIR)/$(1).out: $$(OBJS) $$(DEP_OBJS_$(1)) $$(DEP_LIBS_$(1)) $$(DEPENDS_$(1))
 	@mkdir -p $$(IMAGEODIR)
-	$$(CC) $$(LDFLAGS) $$(if $$(LINKFLAGS_$(1)),$$(LINKFLAGS_$(1)),$$(LINKFLAGS_DEFAULT) $$(OBJS) $$(DEP_OBJS_$(1)) $$(DEP_LIBS_$(1))) -o $$@ 
+	$$(CC) $$(LDFLAGS) $$(if $$(LINKFLAGS_$(1)),$$(LINKFLAGS_$(1)),$$(LINKFLAGS_DEFAULT) $$(OBJS) $$(DEP_OBJS_$(1)) $$(DEP_LIBS_$(1))) -o $$@
 endef
 
 $(BINODIR)/%.bin: $(IMAGEODIR)/%.out
 	@mkdir -p $(BIN_PATH)
 	@mkdir -p $(BINODIR)
-	
+
 ifeq ($(APP), 0)
-	@$(RM) -r $(BIN_PATH)/eagle.S $(BIN_PATH)/eagle.dump
+	@$(RM) -R $(BIN_PATH)/eagle.S $(BIN_PATH)/eagle.dump
 	@$(OBJDUMP) -x -s $< > $(BIN_PATH)/eagle.dump
 	@$(OBJDUMP) -S $< > $(BIN_PATH)/eagle.S
 else
 	@mkdir -p $(BIN_PATH)/upgrade
-	@$(RM) -r $(BIN_PATH)/upgrade/$(BIN_NAME).S $(BIN_PATH)/upgrade/$(BIN_NAME).dump
+	@$(RM) -R $(BIN_PATH)/upgrade/$(BIN_NAME).S $(BIN_PATH)/upgrade/$(BIN_NAME).dump
 	@$(OBJDUMP) -x -s $< > $(BIN_PATH)/upgrade/$(BIN_NAME).dump
 	@$(OBJDUMP) -S $< > $(BIN_PATH)/upgrade/$(BIN_NAME).S
 endif
@@ -257,7 +288,7 @@ endif
 	@echo ""
 	@echo "!!!"
 	@echo "SDK_PATH: $(SDK_PATH)"
-	
+
 ifeq ($(app), 0)
 	@python $(SDK_PATH)/tools/gen_appbin.py $< 0 $(mode) $(freqdiv) $(size_map)
 	@mv eagle.app.flash.bin $(BIN_PATH)/eagle.flash.bin
@@ -308,11 +339,16 @@ all:	.subdirs $(OBJS) $(OLIBS) $(OIMAGES) $(OBINS) $(SPECIAL_MKTARGETS)
 
 clean:
 	$(foreach d, $(SUBDIRS), $(MAKE) -C $(d) clean;)
-	$(RM) -r $(ODIR)/$(TARGET)/$(FLAVOR)
+	$(RM) -Rf $(ODIR)/$(TARGET)/$(FLAVOR)
+
+flash: all
+	@echo "$(ESPTOOL) -p $(ESPPORT) -b 115200 write_flash $(flashimageoptions) 0x00000 $(BIN_PATH)/$(BIN_APP_0000) $(addr) $(BIN_PATH)/$(BIN_APP_DIR)$(BIN_APP_FILE)"
+	$(ESPTOOL) -p $(ESPPORT) -b 115200 write_flash $(flashimageoptions) 0x00000 $(BIN_PATH)/$(BIN_APP_0000) $(addr) $(BIN_PATH)/$(BIN_APP_DIR)$(BIN_APP_FILE)
+	@python -m serial.tools.miniterm $(ESPPORT) $(BAUD)
 
 clobber: $(SPECIAL_CLOBBER)
 	$(foreach d, $(SUBDIRS), $(MAKE) -C $(d) clobber;)
-	$(RM) -r $(ODIR)
+	$(RM) -Rf $(ODIR)
 
 .subdirs:
 	@set -e; $(foreach d, $(SUBDIRS), $(MAKE) -C $(d);)
@@ -339,7 +375,7 @@ $(OBJODIR)/%.d: %.c
 	$(CC) -M $(CFLAGS) $< > $@.$$$$; \
 	sed 's,\($*\.o\)[ :]*,$(OBJODIR)/\1 $@ : ,g' < $@.$$$$ > $@; \
 	rm -f $@.$$$$
-	
+
 $(OBJODIR)/%.o: %.cpp
 	@mkdir -p $(OBJODIR);
 	$(CPP) $(if $(findstring $<,$(DSRCS)),$(DFLAGS),$(CFLAGS)) $(COPTS_$(*F)) -o $@ -c $<
